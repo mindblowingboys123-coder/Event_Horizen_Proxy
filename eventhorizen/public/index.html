@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>eventhorizen</title><meta name="theme-color" content="#05040d">
+<link rel="stylesheet" href="/shell.css">
+<script src="/scram/scramjet.all.js"></script>
+<script src="/baremux/index.js"></script>
+</head><body>
+
+<canvas id="bg"></canvas>
+<div id="win">
+  <div id="top"><div id="strip"></div><button class="nb" id="plus" title="New tab">+</button></div>
+  <div id="bar">
+    <button class="nb" id="back" title="Back">&#8592;</button>
+    <button class="nb" id="fwd" title="Forward">&#8594;</button>
+    <button class="nb" id="rel" title="Reload">&#8635;</button>
+    <button class="nb" id="home" title="New tab page">&#8962;</button>
+    <div class="omni"><span class="lock">&#9673;</span><input id="addr" placeholder="Search or enter a web address" autocomplete="off" spellcheck="false" autocapitalize="off"></div>
+    <button class="nb" id="menu" title="Menu">&#8942;</button>
+    <div id="pop" class="hidden"><a id="pNew">New tab</a><a id="pFs">Fullscreen</a><a href="/logout">Sign out</a></div>
+  </div>
+  <div id="load"><i></i></div>
+  <div id="view">
+    <div id="ntp">
+      <div class="word"><i class="orb"></i>eventhorizen</div>
+      <form id="nf"><input id="nq" placeholder="Search or enter a web address" autocomplete="off" spellcheck="false"><button type="submit">Go</button></form>
+      <p id="err" class="errline"></p>
+      <div class="tiles">
+        <a data-go="https://en.wikipedia.org">Wikipedia</a>
+        <a data-go="https://duckduckgo.com">DuckDuckGo</a>
+        <a data-go="https://archive.org">Internet Archive</a>
+        <a data-go="https://news.ycombinator.com">Hacker News</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/wallpaper.js"></script>
+<script src="/app.js"></script>
+</body></html>

@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: eventhorizen
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: PASSWORD
+        sync: false
