@@ -41,17 +41,22 @@ async function pickModel() {
   names.sort((a, b) => ver(b) - ver(a));
   return names.find((n) => !/lite/.test(n)) || names[0] || "";
 }
+let think = process.env.GEMINI_THINKING !== "on"; // by default switch the model's slow "thinking" step off for fast answers
 async function callGemini(contents, signal) {
   const go = () => fetch(`${GEMINI_BASE}/v1beta/models/${encodeURIComponent(GEMINI_MODEL)}:generateContent`, {
     method: "POST", signal,
     headers: { "content-type": "application/json", "x-goog-api-key": GEMINI_KEY },
-    body: JSON.stringify({ system_instruction: { parts: [{ text: SYSTEM }] }, contents, generationConfig: { maxOutputTokens: 2048 } }),
+    body: JSON.stringify({ system_instruction: { parts: [{ text: SYSTEM }] }, contents,
+      generationConfig: { maxOutputTokens: 2048, ...(think ? { thinkingConfig: { thinkingBudget: 0 } } : {}) } }),
   });
   let r = await go();
   if (r.status === 404 && !modelPicked) {
     modelPicked = true;                       // only try discovery once per start-up
     const m = await pickModel().catch(() => "");
     if (m) { GEMINI_MODEL = m; console.log("using Gemini model", m); r = await go(); }
+  }
+  if (r.status === 400 && think) {            // this model doesn't accept the "no thinking" setting: stop sending it
+    think = false; console.log("model rejected thinking setting; retrying without it"); r = await go();
   }
   return r;
 }
