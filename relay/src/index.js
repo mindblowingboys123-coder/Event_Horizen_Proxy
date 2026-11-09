@@ -31,7 +31,7 @@ const aiHits = new Map(); // token -> recent request times (simple per-minute li
 
 // Ask Google which models this key can use and pick a current, stable "flash" one (used when the default name is rejected).
 async function pickModel() {
-  const r = await fetch(`${GEMINI_BASE}/v1beta/models?pageSize=200`, { headers: { "x-goog-api-key": GEMINI_KEY } });
+  const r = await fetch(`${GEMINI_BASE}/v1beta/models?pageSize=200`, { headers: { "x-goog-api-key": GEMINI_KEY }, signal: AbortSignal.timeout(15000) });
   if (!r.ok) return "";
   const j = await r.json().catch(() => ({}));
   const names = (j.models || []).filter((m) => (m.supportedGenerationMethods || []).includes("generateContent"))
@@ -90,7 +90,8 @@ const server = createServer(async (req, res) => {
       const contents = msgs.filter((m) => m && typeof m.text === "string" && m.text.trim())
         .map((m) => ({ role: m.role === "model" ? "model" : "user", parts: [{ text: m.text.slice(0, 4000) }] }));
       if (!contents.length || contents[contents.length - 1].role !== "user") return json(res, 400, { error: "Nothing to answer." });
-      const ac = new AbortController(); const tm = setTimeout(() => ac.abort(), 40000);
+      const ac = new AbortController(); const tm = setTimeout(() => ac.abort(), 40000); const t0 = Date.now();
+      console.log("ai: question received, asking model", GEMINI_MODEL);
       try {
         const r = await callGemini(contents, ac.signal);
         const j = await r.json().catch(() => ({}));
@@ -102,11 +103,13 @@ const server = createServer(async (req, res) => {
           if (r.status === 404) return json(res, 502, { error: "No working Gemini model was found for this key. Check the key in AI Studio, or set GEMINI_MODEL on the server." });
           return json(res, 502, { error: "Horizen AI could not answer (" + r.status + ")." });
         }
+        console.log("ai: answered by", GEMINI_MODEL, "in", Date.now() - t0, "ms");
         const cand = j.candidates && j.candidates[0];
         const text = cand && cand.content && cand.content.parts ? cand.content.parts.map((x) => x.text || "").join("") : "";
         if (!text) return json(res, 200, { text: j.promptFeedback && j.promptFeedback.blockReason ? "I can't help with that one." : "I don't have an answer for that." });
         return json(res, 200, { text });
       } catch (e) {
+        console.log("ai: failed after", Date.now() - t0, "ms:", e && e.name, e && e.message);
         return json(res, 504, { error: e && e.name === "AbortError" ? "Horizen AI took too long. Try again." : "Could not reach Gemini." });
       } finally { clearTimeout(tm); }
     }
@@ -124,5 +127,5 @@ server.on("upgrade", (req, socket, head) => {
   socket.destroy();
 });
 
-server.listen(PORT, "0.0.0.0", () => console.log("relay listening on " + PORT + (PASSWORD ? "" : " (PASSWORD not set: locked)")));
+server.listen(PORT, "0.0.0.0", () => console.log("relay listening on " + PORT + (PASSWORD ? "" : " (PASSWORD not set: locked)") + " | Gemini key " + (GEMINI_KEY ? "set" : "NOT set") + " | model " + GEMINI_MODEL));
 process.on("SIGTERM", () => { server.close(); process.exit(0); });

@@ -192,12 +192,12 @@
     aiHist.push({ role: "user", text: text }); addMsg("u", text);
     var wait = addMsg("m", ""); wait.innerHTML = '<span class="dots"><i></i><i></i><i></i></span>';
     try {
-      var r = await fetch(RELAY + "/api/ai", { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + getTok() }, body: JSON.stringify({ messages: aiHist.slice(-20) }) });
+      var r = await fetch(RELAY + "/api/ai", { method: "POST", signal: AbortSignal.timeout(75000), headers: { "content-type": "application/json", authorization: "Bearer " + getTok() }, body: JSON.stringify({ messages: aiHist.slice(-20) }) });
       var j = await r.json().catch(function () { return {}; });
       wait.remove();
       if (r.ok && j.text) { aiHist.push({ role: "model", text: j.text }); addMsg("m", j.text); }
       else { aiHist.pop(); addMsg("e", j.error || "Something went wrong. Try again."); if (r.status === 401) { setTok(""); } }
-    } catch (e) { wait.remove(); aiHist.pop(); addMsg("e", "Could not reach the server. It may be waking up: try again in a moment."); }
+    } catch (e) { wait.remove(); aiHist.pop(); addMsg("e", e && e.name === "TimeoutError" ? "No answer after 75 seconds. The server may be asleep or stuck: open your Render address + /healthz, wait for \"ok\", then try again." : "Could not reach the server. It may be waking up: try again in a moment."); }
     aiSave(); aiBusy = false; aiGo.disabled = false; aiQ.focus();
   }
   $("#aib").addEventListener("click", function (e) { e.stopPropagation(); aiToggle(); });
