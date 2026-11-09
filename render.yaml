@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: eventhorizen-relay
+    runtime: node
+    rootDir: relay
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: PASSWORD
+        sync: false
