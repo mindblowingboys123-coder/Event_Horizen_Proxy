@@ -20,12 +20,41 @@ Object.assign(wisp.options, {
 });
 
 const GEMINI_KEY = process.env.GEMINI_API_KEY || "";
-const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+let GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-flash-latest";
+let modelPicked = !!process.env.GEMINI_MODEL; // if you set GEMINI_MODEL yourself we never override it
 const GEMINI_BASE = process.env.GEMINI_BASE || "https://generativelanguage.googleapis.com";
 const SYSTEM = "You are Horizen AI, the built-in assistant of the eventhorizen browser. Answer questions about anything clearly and accurately. " +
   "Be concise by default and use short paragraphs or simple lists when they help. If you are not sure about something, say so rather than guessing. " +
   "You cannot browse the web or see the page the user has open.";
 const aiHits = new Map(); // token -> recent request times (simple per-minute limit)
+
+
+// Ask Google which models this key can use and pick a current, stable "flash" one (used when the default name is rejected).
+async function pickModel() {
+  const r = await fetch(`${GEMINI_BASE}/v1beta/models?pageSize=200`, { headers: { "x-goog-api-key": GEMINI_KEY } });
+  if (!r.ok) return "";
+  const j = await r.json().catch(() => ({}));
+  const names = (j.models || []).filter((m) => (m.supportedGenerationMethods || []).includes("generateContent"))
+    .map((m) => String(m.name || "").replace(/^models\//, ""))
+    .filter((n) => /^gemini-[\d.]+-flash(-lite)?$/.test(n) || /^gemini-flash(-lite)?-latest$/.test(n));
+  const ver = (n) => { const m = n.match(/^gemini-([\d.]+)-flash(-lite)?$/); return m ? parseFloat(m[1]) - (m[2] ? 0.01 : 0) : 0; };
+  names.sort((a, b) => ver(b) - ver(a));
+  return names.find((n) => !/lite/.test(n)) || names[0] || "";
+}
+async function callGemini(contents, signal) {
+  const go = () => fetch(`${GEMINI_BASE}/v1beta/models/${encodeURIComponent(GEMINI_MODEL)}:generateContent`, {
+    method: "POST", signal,
+    headers: { "content-type": "application/json", "x-goog-api-key": GEMINI_KEY },
+    body: JSON.stringify({ system_instruction: { parts: [{ text: SYSTEM }] }, contents, generationConfig: { maxOutputTokens: 2048 } }),
+  });
+  let r = await go();
+  if (r.status === 404 && !modelPicked) {
+    modelPicked = true;                       // only try discovery once per start-up
+    const m = await pickModel().catch(() => "");
+    if (m) { GEMINI_MODEL = m; console.log("using Gemini model", m); r = await go(); }
+  }
+  return r;
+}
 
 const fails = new Map();
 const ipOf = (req) => (req.headers["x-forwarded-for"] || req.socket.remoteAddress || "").toString().split(",")[0].trim();
@@ -63,18 +92,14 @@ const server = createServer(async (req, res) => {
       if (!contents.length || contents[contents.length - 1].role !== "user") return json(res, 400, { error: "Nothing to answer." });
       const ac = new AbortController(); const tm = setTimeout(() => ac.abort(), 40000);
       try {
-        const r = await fetch(`${GEMINI_BASE}/v1beta/models/${encodeURIComponent(GEMINI_MODEL)}:generateContent`, {
-          method: "POST", signal: ac.signal,
-          headers: { "content-type": "application/json", "x-goog-api-key": GEMINI_KEY },
-          body: JSON.stringify({ system_instruction: { parts: [{ text: SYSTEM }] }, contents, generationConfig: { maxOutputTokens: 2048 } }),
-        });
+        const r = await callGemini(contents, ac.signal);
         const j = await r.json().catch(() => ({}));
         if (!r.ok) {
           const m = (j.error && j.error.message) || ("Gemini error " + r.status);
           console.log("gemini error", r.status, m.slice(0, 300));
           if (r.status === 429) return json(res, 429, { error: "Horizen AI is busy right now (free quota). Try again in a minute." });
           if (r.status === 400 || r.status === 403) return json(res, 502, { error: "The Gemini key was rejected or the model name is wrong. Check GEMINI_API_KEY and GEMINI_MODEL on the server." });
-          if (r.status === 404) return json(res, 502, { error: "That Gemini model name was not found. Set GEMINI_MODEL on the server to a current model." });
+          if (r.status === 404) return json(res, 502, { error: "No working Gemini model was found for this key. Check the key in AI Studio, or set GEMINI_MODEL on the server." });
           return json(res, 502, { error: "Horizen AI could not answer (" + r.status + ")." });
         }
         const cand = j.candidates && j.candidates[0];
