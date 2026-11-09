@@ -19,9 +19,17 @@ Object.assign(wisp.options, {
   dns_servers: ["1.1.1.1", "8.8.8.8"],
 });
 
+const GEMINI_KEY = process.env.GEMINI_API_KEY || "";
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+const GEMINI_BASE = process.env.GEMINI_BASE || "https://generativelanguage.googleapis.com";
+const SYSTEM = "You are Horizen AI, the built-in assistant of the eventhorizen browser. Answer questions about anything clearly and accurately. " +
+  "Be concise by default and use short paragraphs or simple lists when they help. If you are not sure about something, say so rather than guessing. " +
+  "You cannot browse the web or see the page the user has open.";
+const aiHits = new Map(); // token -> recent request times (simple per-minute limit)
+
 const fails = new Map();
 const ipOf = (req) => (req.headers["x-forwarded-for"] || req.socket.remoteAddress || "").toString().split(",")[0].trim();
-const cors = { "access-control-allow-origin": ORIGIN, "access-control-allow-methods": "POST, GET, OPTIONS", "access-control-allow-headers": "content-type", "access-control-max-age": "600" };
+const cors = { "access-control-allow-origin": ORIGIN, "access-control-allow-methods": "POST, GET, OPTIONS", "access-control-allow-headers": "content-type, authorization", "access-control-max-age": "600" };
 const readBody = (req, limit = 2048) => new Promise((ok, no) => { let n = 0; const c = [];
   req.on("data", (d) => { n += d.length; if (n > limit) { no(new Error("big")); req.destroy(); } else c.push(d); });
   req.on("end", () => ok(Buffer.concat(c).toString())); req.on("error", no); });
@@ -40,6 +48,42 @@ const server = createServer(async (req, res) => {
       if (!safeEq(h(pw), h(PASSWORD))) { const n = (f ? f.n : 0) + 1; fails.set(ip, { n, until: n >= 5 ? Date.now() + 60000 : 0 }); return json(res, 401, { error: "Wrong password." }); }
       fails.delete(ip);
       return json(res, 200, { token: TOKEN });
+    }
+    if (p === "/api/ai" && req.method === "POST") {
+      const auth = (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
+      if (!safeEq(auth, TOKEN)) return json(res, 401, { error: "Please sign in again." });
+      if (!GEMINI_KEY) return json(res, 503, { error: "Horizen AI is not set up yet: add GEMINI_API_KEY on the server." });
+      const now = Date.now(), hits = (aiHits.get(TOKEN) || []).filter((t) => now - t < 60000);
+      if (hits.length >= 15) return json(res, 429, { error: "Slow down a little: try again in a few seconds." });
+      hits.push(now); aiHits.set(TOKEN, hits);
+      let body; try { body = JSON.parse(await readBody(req, 60000)); } catch { return json(res, 400, { error: "Bad request." }); }
+      const msgs = Array.isArray(body.messages) ? body.messages.slice(-20) : [];
+      const contents = msgs.filter((m) => m && typeof m.text === "string" && m.text.trim())
+        .map((m) => ({ role: m.role === "model" ? "model" : "user", parts: [{ text: m.text.slice(0, 4000) }] }));
+      if (!contents.length || contents[contents.length - 1].role !== "user") return json(res, 400, { error: "Nothing to answer." });
+      const ac = new AbortController(); const tm = setTimeout(() => ac.abort(), 40000);
+      try {
+        const r = await fetch(`${GEMINI_BASE}/v1beta/models/${encodeURIComponent(GEMINI_MODEL)}:generateContent`, {
+          method: "POST", signal: ac.signal,
+          headers: { "content-type": "application/json", "x-goog-api-key": GEMINI_KEY },
+          body: JSON.stringify({ system_instruction: { parts: [{ text: SYSTEM }] }, contents, generationConfig: { maxOutputTokens: 2048 } }),
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          const m = (j.error && j.error.message) || ("Gemini error " + r.status);
+          console.log("gemini error", r.status, m.slice(0, 300));
+          if (r.status === 429) return json(res, 429, { error: "Horizen AI is busy right now (free quota). Try again in a minute." });
+          if (r.status === 400 || r.status === 403) return json(res, 502, { error: "The Gemini key was rejected or the model name is wrong. Check GEMINI_API_KEY and GEMINI_MODEL on the server." });
+          if (r.status === 404) return json(res, 502, { error: "That Gemini model name was not found. Set GEMINI_MODEL on the server to a current model." });
+          return json(res, 502, { error: "Horizen AI could not answer (" + r.status + ")." });
+        }
+        const cand = j.candidates && j.candidates[0];
+        const text = cand && cand.content && cand.content.parts ? cand.content.parts.map((x) => x.text || "").join("") : "";
+        if (!text) return json(res, 200, { text: j.promptFeedback && j.promptFeedback.blockReason ? "I can't help with that one." : "I don't have an answer for that." });
+        return json(res, 200, { text });
+      } catch (e) {
+        return json(res, 504, { error: e && e.name === "AbortError" ? "Horizen AI took too long. Try again." : "Could not reach Gemini." });
+      } finally { clearTimeout(tm); }
     }
     if (p === "/api/check") { const k = new URL(req.url, "http://x").searchParams.get("k") || ""; return json(res, safeEq(k, TOKEN) ? 200 : 401, { ok: safeEq(k, TOKEN) }); }
     json(res, 404, { error: "not found" });

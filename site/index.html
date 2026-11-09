@@ -17,6 +17,7 @@
     <button class="nb" id="rel" title="Reload">&#8635;</button>
     <button class="nb" id="home" title="New tab page">&#8962;</button>
     <div class="omni"><span class="lock">&#9673;</span><input id="addr" placeholder="Search or enter a web address" autocomplete="off" spellcheck="false" autocapitalize="off"></div>
+    <button class="nb" id="aib" title="Horizen AI">&#10022;</button>
     <button class="nb" id="menu" title="Menu">&#8942;</button>
     <div id="pop" class="hidden"><a id="pNew">New tab</a><a id="pFs">Fullscreen</a><a id="pOut">Sign out</a></div>
   </div>
@@ -36,6 +37,11 @@
   </div>
 </div>
 
+<aside id="ai" class="hidden" aria-label="Horizen AI">
+  <div id="aih"><b>&#10022; Horizen AI</b><span><button class="nb sm" id="aiclr" title="New chat">&#8635;</button><button class="nb sm" id="aix" title="Close">&times;</button></span></div>
+  <div id="aim"></div>
+  <form id="aif"><textarea id="aiq" rows="1" placeholder="Ask me anything" maxlength="4000"></textarea><button type="submit" id="aigo">&#10148;</button></form>
+</aside>
 <div id="gate" class="hidden"><form id="gf"><div class="word"><i class="orb"></i>eventhorizen</div>
 <input id="gpw" type="password" placeholder="Password" autocomplete="current-password" required><button type="submit">Enter</button><p id="gmsg"></p></form></div>
 <script src="/wallpaper.js"></script>

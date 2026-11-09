@@ -158,7 +158,55 @@
     if (d.fullscreenElement) d.exitFullscreen(); else if (el.requestFullscreen) el.requestFullscreen();
   });
 
-  $("#pOut").addEventListener("click", function () { setTok(""); location.reload(); });
+
+  /* ---------- Horizen AI (the Gemini key stays on the relay server; this page only sends your question) ---------- */
+  var aiBox = $("#ai"), aiMsgs = $("#aim"), aiQ = $("#aiq"), aiGo = $("#aigo"), aiHist = [], aiBusy = false;
+  try { aiHist = JSON.parse(localStorage.getItem("eh_ai") || "[]").filter(function (m) { return m && typeof m.text === "string"; }).slice(-20); } catch (e) { aiHist = []; }
+  function aiSave() { try { localStorage.setItem("eh_ai", JSON.stringify(aiHist.slice(-20))); } catch (e) {} }
+  function fmt(el, text) {                      // tiny safe formatter: ```code```, `code`, **bold**  (built from text nodes only)
+    el.textContent = "";
+    text.split(/```/).forEach(function (part, i) {
+      if (i % 2) { var pre = document.createElement("pre"), code = document.createElement("code"); code.textContent = part.replace(/^[a-zA-Z0-9+#-]*\n/, "").replace(/\n$/, ""); pre.appendChild(code); el.appendChild(pre); return; }
+      part.split(/(`[^`\n]+`|\*\*[^*\n]+\*\*)/).forEach(function (seg) {
+        if (/^`[^`\n]+`$/.test(seg)) { var c = document.createElement("code"); c.textContent = seg.slice(1, -1); el.appendChild(c); }
+        else if (/^\*\*[^*\n]+\*\*$/.test(seg)) { var b = document.createElement("b"); b.textContent = seg.slice(2, -2); el.appendChild(b); }
+        else el.appendChild(document.createTextNode(seg));
+      });
+    });
+  }
+  function addMsg(cls, text) { var d = document.createElement("div"); d.className = "am " + cls; if (cls === "m") fmt(d, text); else d.textContent = text; aiMsgs.appendChild(d); aiMsgs.scrollTop = aiMsgs.scrollHeight; return d; }
+  function aiRender() {
+    aiMsgs.textContent = "";
+    if (!aiHist.length) { var h = document.createElement("div"); h.className = "aihint"; h.textContent = "Hi, I'm Horizen AI. Ask me anything."; aiMsgs.appendChild(h); }
+    aiHist.forEach(function (m) { addMsg(m.role === "model" ? "m" : "u", m.text); });
+  }
+  function aiToggle(on) {
+    var show = on === undefined ? aiBox.classList.contains("hidden") : on;
+    aiBox.classList.toggle("hidden", !show);
+    if (show) { aiRender(); setTimeout(function () { aiQ.focus(); }, 0); }
+  }
+  async function aiSend(text) {
+    if (aiBusy || !text.trim()) return;
+    aiBusy = true; aiGo.disabled = true;
+    var hint = aiMsgs.querySelector(".aihint"); if (hint) hint.remove();
+    aiHist.push({ role: "user", text: text }); addMsg("u", text);
+    var wait = addMsg("m", ""); wait.innerHTML = '<span class="dots"><i></i><i></i><i></i></span>';
+    try {
+      var r = await fetch(RELAY + "/api/ai", { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + getTok() }, body: JSON.stringify({ messages: aiHist.slice(-20) }) });
+      var j = await r.json().catch(function () { return {}; });
+      wait.remove();
+      if (r.ok && j.text) { aiHist.push({ role: "model", text: j.text }); addMsg("m", j.text); }
+      else { aiHist.pop(); addMsg("e", j.error || "Something went wrong. Try again."); if (r.status === 401) { setTok(""); } }
+    } catch (e) { wait.remove(); aiHist.pop(); addMsg("e", "Could not reach the server. It may be waking up: try again in a moment."); }
+    aiSave(); aiBusy = false; aiGo.disabled = false; aiQ.focus();
+  }
+  $("#aib").addEventListener("click", function (e) { e.stopPropagation(); aiToggle(); });
+  $("#aix").addEventListener("click", function () { aiToggle(false); });
+  $("#aiclr").addEventListener("click", function () { aiHist = []; aiSave(); aiRender(); });
+  $("#aif").addEventListener("submit", function (e) { e.preventDefault(); var v = aiQ.value; aiQ.value = ""; aiQ.style.height = "auto"; aiSend(v); });
+  aiQ.addEventListener("keydown", function (e) { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("#aif").requestSubmit(); } });
+  aiQ.addEventListener("input", function () { aiQ.style.height = "auto"; aiQ.style.height = Math.min(aiQ.scrollHeight, 120) + "px"; });
+  $("#pOut").addEventListener("click", function () { setTok(""); try { localStorage.removeItem("eh_ai"); } catch (e) {} location.reload(); });
 
   /* ---------- password gate (checked by the relay server, never stored in the page) ---------- */
   var gate = $("#gate"), gmsg = $("#gmsg");
