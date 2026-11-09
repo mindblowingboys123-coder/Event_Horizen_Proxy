@@ -42,23 +42,52 @@ async function pickModel() {
   return names.find((n) => !/lite/.test(n)) || names[0] || "";
 }
 let think = process.env.GEMINI_THINKING !== "on"; // by default switch the model's slow "thinking" step off for fast answers
-async function callGemini(contents, signal) {
-  const go = () => fetch(`${GEMINI_BASE}/v1beta/models/${encodeURIComponent(GEMINI_MODEL)}:generateContent`, {
-    method: "POST", signal,
-    headers: { "content-type": "application/json", "x-goog-api-key": GEMINI_KEY },
-    body: JSON.stringify({ system_instruction: { parts: [{ text: SYSTEM }] }, contents,
-      generationConfig: { maxOutputTokens: 2048, ...(think ? { thinkingConfig: { thinkingBudget: 0 } } : {}) } }),
-  });
-  let r = await go();
-  if (r.status === 404 && !modelPicked) {
-    modelPicked = true;                       // only try discovery once per start-up
+// When one model is overloaded (503) or stalls, try the next. The one that works moves to the front of the line.
+const FALLBACKS = (process.env.GEMINI_FALLBACKS || "gemini-flash-lite-latest,gemini-2.5-flash,gemini-2.5-flash-lite,gemini-2.0-flash").split(",").map((x) => x.trim()).filter(Boolean);
+let order = [...new Set([GEMINI_MODEL, ...FALLBACKS])];
+const ATTEMPT_MS = 15000;
+
+async function tryModel(model, contents, outer, withThink) {
+  const ac = new AbortController();
+  const onOuter = () => ac.abort();
+  if (outer) { if (outer.aborted) ac.abort(); else outer.addEventListener("abort", onOuter, { once: true }); }
+  const tm = setTimeout(() => ac.abort(), ATTEMPT_MS);
+  try {
+    return await fetch(`${GEMINI_BASE}/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+      method: "POST", signal: ac.signal,
+      headers: { "content-type": "application/json", "x-goog-api-key": GEMINI_KEY },
+      body: JSON.stringify({ system_instruction: { parts: [{ text: SYSTEM }] }, contents,
+        generationConfig: { maxOutputTokens: 2048, ...(withThink ? { thinkingConfig: { thinkingBudget: 0 } } : {}) } }),
+    });
+  } finally { clearTimeout(tm); if (outer) outer.removeEventListener("abort", onOuter); }
+}
+
+async function callGemini(contents, outer) {
+  let last = null, lastErr = null, tried = 0;
+  for (const model of [...order]) {
+    if (outer && outer.aborted) break;
+    if (tried++ >= 4) break;
+    try {
+      let r = await tryModel(model, contents, outer, think);
+      if (r.status === 400 && think) { think = false; console.log("model rejected thinking setting; retrying without it"); r = await tryModel(model, contents, outer, false); }
+      if (r.ok) {
+        if (order[0] !== model) { order = [model, ...order.filter((m) => m !== model)]; GEMINI_MODEL = model; console.log("using Gemini model", model); }
+        return r;
+      }
+      last = r; lastErr = null;
+      console.log("model", model, "gave status", r.status);
+      if (r.status === 404) { order = order.filter((m) => m !== model); continue; }   // name doesn't exist for this key
+      if (r.status === 429 || r.status >= 500) continue;                              // busy or broken: next model
+      return r;                                                                        // 400/403: key problem, retrying won't help
+    } catch (e) { lastErr = e; console.log("model", model, "no answer in time:", e && e.name); }
+  }
+  if (!order.length && !modelPicked) {                                                // every name was unknown: ask Google what exists
+    modelPicked = true;
     const m = await pickModel().catch(() => "");
-    if (m) { GEMINI_MODEL = m; console.log("using Gemini model", m); r = await go(); }
+    if (m) { GEMINI_MODEL = m; order = [m]; console.log("using Gemini model", m); return callGemini(contents, outer); }
   }
-  if (r.status === 400 && think) {            // this model doesn't accept the "no thinking" setting: stop sending it
-    think = false; console.log("model rejected thinking setting; retrying without it"); r = await go();
-  }
-  return r;
+  if (last) return last;
+  throw lastErr || new Error("no model answered");
 }
 
 const fails = new Map();
@@ -95,7 +124,7 @@ const server = createServer(async (req, res) => {
       const contents = msgs.filter((m) => m && typeof m.text === "string" && m.text.trim())
         .map((m) => ({ role: m.role === "model" ? "model" : "user", parts: [{ text: m.text.slice(0, 4000) }] }));
       if (!contents.length || contents[contents.length - 1].role !== "user") return json(res, 400, { error: "Nothing to answer." });
-      const ac = new AbortController(); const tm = setTimeout(() => ac.abort(), 40000); const t0 = Date.now();
+      const ac = new AbortController(); const tm = setTimeout(() => ac.abort(), 55000); const t0 = Date.now();
       console.log("ai: question received, asking model", GEMINI_MODEL);
       try {
         const r = await callGemini(contents, ac.signal);
@@ -103,6 +132,7 @@ const server = createServer(async (req, res) => {
         if (!r.ok) {
           const m = (j.error && j.error.message) || ("Gemini error " + r.status);
           console.log("gemini error", r.status, m.slice(0, 300));
+          if (r.status === 503 || r.status === 500) return json(res, 503, { error: "Google's AI is overloaded right now. Try again in a minute." });
           if (r.status === 429) return json(res, 429, { error: "Horizen AI is busy right now (free quota). Try again in a minute." });
           if (r.status === 400 || r.status === 403) return json(res, 502, { error: "The Gemini key was rejected or the model name is wrong. Check GEMINI_API_KEY and GEMINI_MODEL on the server." });
           if (r.status === 404) return json(res, 502, { error: "No working Gemini model was found for this key. Check the key in AI Studio, or set GEMINI_MODEL on the server." });

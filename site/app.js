@@ -191,16 +191,20 @@
     var hint = aiMsgs.querySelector(".aihint"); if (hint) hint.remove();
     aiHist.push({ role: "user", text: text }); addMsg("u", text);
     var wait = addMsg("m", ""); wait.innerHTML = '<span class="dots"><i></i><i></i><i></i></span>';
+    var slow = setTimeout(function () { if (wait.isConnected) { wait.innerHTML = '<span class="dots"><i></i><i></i><i></i></span> <small style="opacity:.7">waking the server, this can take up to a minute the first time</small>'; } }, 8000);
     try {
-      var r = await fetch(RELAY + "/api/ai", { method: "POST", signal: AbortSignal.timeout(75000), headers: { "content-type": "application/json", authorization: "Bearer " + getTok() }, body: JSON.stringify({ messages: aiHist.slice(-20) }) });
+      var r = await fetch(RELAY + "/api/ai", { method: "POST", signal: AbortSignal.timeout(80000), headers: { "content-type": "application/json", authorization: "Bearer " + getTok() }, body: JSON.stringify({ messages: aiHist.slice(-20) }) });
       var j = await r.json().catch(function () { return {}; });
       wait.remove();
       if (r.ok && j.text) { aiHist.push({ role: "model", text: j.text }); addMsg("m", j.text); }
       else { aiHist.pop(); addMsg("e", j.error || "Something went wrong. Try again."); if (r.status === 401) { setTok(""); } }
-    } catch (e) { wait.remove(); aiHist.pop(); addMsg("e", e && e.name === "TimeoutError" ? "No answer after 75 seconds. The server may be asleep or stuck: open your Render address + /healthz, wait for \"ok\", then try again." : "Could not reach the server. It may be waking up: try again in a moment."); }
-    aiSave(); aiBusy = false; aiGo.disabled = false; aiQ.focus();
+    } catch (e) { wait.remove(); aiHist.pop(); addMsg("e", e && e.name === "TimeoutError" ? "No answer after 80 seconds. The server may be asleep or stuck: open your Render address + /healthz, wait for \"ok\", then try again." : "Could not reach the server. It may be waking up: try again in a moment."); }
+    clearTimeout(slow); aiSave(); aiBusy = false; aiGo.disabled = false; aiQ.focus();
   }
-  $("#aib").addEventListener("click", function (e) { e.stopPropagation(); aiToggle(); });
+  function wake() { if (RELAY) { try { fetch(RELAY + "/healthz", { mode: "no-cors", cache: "no-store" }).catch(function () {}); } catch (e) {} } }
+  setInterval(function () { if (!document.hidden) wake(); }, 8 * 60 * 1000);   // free Render sleeps after 15 idle minutes; this keeps it awake while this tab is open
+  document.addEventListener("visibilitychange", function () { if (!document.hidden) wake(); });
+  $("#aib").addEventListener("click", function (e) { e.stopPropagation(); wake(); aiToggle(); });
   $("#aix").addEventListener("click", function () { aiToggle(false); });
   $("#aiclr").addEventListener("click", function () { aiHist = []; aiSave(); aiRender(); });
   $("#aif").addEventListener("submit", function (e) { e.preventDefault(); var v = aiQ.value; aiQ.value = ""; aiQ.style.height = "auto"; aiSend(v); });
